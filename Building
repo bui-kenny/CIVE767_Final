@@ -20,3 +20,126 @@ import matplotlib.pyplot as plt
 import geopandas as gpd
 import pandas as pd
 import numpy as np
+
+# Connect to IN-CORE Servers 
+client = IncoreClient()
+
+client = IncoreClient()
+hazardsvc = HazardService(client)
+data_services = DataService(client)
+space_services = SpaceService(client)
+
+dataset_metadata = {
+    "title":"FC_Building_Inventory",
+    "description": "Fort Collins Area",
+    "dataType": "ergo:buildingInventoryVer6",
+    "format": "shapefile"
+}
+
+created_dataset = data_services.create_dataset(dataset_metadata)
+dataset_id = created_dataset['id']
+print('dataset is created with id: ' + dataset_id)
+
+files = ['BuildingInventory.shp',
+         'BuildingInventory.shx',
+         'BuildingInventory.prj',
+         'BuildingInventory.dbf']
+
+full_dataset = data_services.add_files_to_dataset(dataset_id, files)
+
+full_dataset
+
+hazard_type = "earthquake"
+
+# Define the new earthquake
+eq_model_metadata = {
+  "name": "Fort Collins EQ Model (modified)",
+  "description": "Fort-Collins model based hazard",
+  "eqType": "model",
+  "attenuations" : {
+    "AtkinsonBoore1995" : "1.0"
+  },
+  "eqParameters" : {
+    "srcLatitude" : "41.13226",
+    "srcLongitude" : "-104.82247",
+    "magnitude" : "8.0",
+    "depth" : "10.0"
+  }, # Will have to mess around with Visual Parameters
+  "visualizationParameters" : {
+    "demandType" : "PGA",
+    "demandUnits" : "g",
+    "minX" :"-105.3099",
+    "minY" :"38.9942",
+    "maxX" : "-103.6231",
+    "maxY" : "41.05",
+    "numPoints" : "1025",
+    "amplifyHazard": "true"
+  }
+}
+
+eq_model_json = json.dumps(eq_model_metadata, indent=4)
+
+# Create an earthquake with definition
+eq_model_response = hazardsvc.create_earthquake(eq_model_json)
+
+print(json.dumps(eq_model_response, indent=4, sort_keys=False))
+
+# Acquire hazard id you created
+eq_model_id = eq_model_response['id']
+print('Hazard ID is created with id: ' + eq_model_id)
+
+# Plot the earthquake
+viz.plot_earthquake(eq_model_id, client)
+
+# Getting hazard value from you model based
+points = [
+    {
+        "demands":["0.2 SA"],
+        "units": ["g"],
+        "loc":"40.571772,-105.056695" #Location of Poudre Hospital? 
+    }
+]
+
+eq_model_vals = hazardsvc.post_earthquake_hazard_values(eq_model_id, points)
+print(json.dumps(eq_model_vals, indent=4, sort_keys=False))
+
+mapping_id = '5b47b2d9337d4a36187c7563'
+
+# Use hazard uncertainty for computing damage
+use_hazard_uncertainty = False
+# Use liquefaction (LIQ) column of bridges to modify fragility curve
+use_liquefaction = False
+
+# Create Seaside tsunami building damage
+bldg_dmg = BuildingDamage(client)
+
+# Load input dataset and fragility mapping
+bldg_dmg.load_remote_input_dataset("buildings", dataset_id)
+
+# Load fragility mapping
+fragility_service = FragilityService(client)
+mapping_set = MappingSet(fragility_service.get_mapping(mapping_id))
+bldg_dmg.set_input_dataset('dfr3_mapping_set', mapping_set)
+
+# Specify the result name
+result_name = "FortCollins_bldg_dmg_result"
+
+# Set analysis parameters
+bldg_dmg.set_parameter("result_name", result_name)
+bldg_dmg.set_parameter("hazard_type", hazard_type)
+bldg_dmg.set_parameter("hazard_id", eq_model_id)
+bldg_dmg.set_parameter("num_cpu", 1)
+
+# Run building damage analysis
+bldg_dmg.run_analysis() 
+
+# Retrieve result dataset
+
+result = bldg_dmg.get_output_dataset("result")
+
+# Convert dataset to Pandas DataFrame
+df = result.get_dataframe_from_csv()
+
+# Display top 5 rows of output data
+df.head()
+
